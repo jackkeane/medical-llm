@@ -1,0 +1,29 @@
+{
+  "medical_train": {
+    "file_name": "../data/processed/medical_train.json",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  },
+  "medical_val": {
+    "file_name": "../data/processed/medical_val.json",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  },
+  "medical_test": {
+    "file_name": "../data/processed/medical_test.json",
+    "formatting": "alpaca",
+    "columns": {
+      "prompt": "instruction",
+      "query": "input",
+      "response": "output"
+    }
+  }
+}

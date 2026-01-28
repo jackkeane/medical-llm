@@ -10,9 +10,6 @@ venv/
 dist/
 build/
 
-# LLaMA Factory (cloned repo)
-LLaMA-Factory/
-
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb

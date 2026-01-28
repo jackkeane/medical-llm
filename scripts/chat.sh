@@ -32,4 +32,4 @@ echo "Type your medical questions below (Ctrl+C to exit):"
 echo ""
 
 # Launch chat interface
-llamafactory-cli chat configs/biomistral_qlora.yaml
+llamafactory-cli chat configs/chat.yaml

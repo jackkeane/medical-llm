@@ -12,6 +12,9 @@ cd "$(dirname "$0")/.."
 # Set CUDA visible devices (adjust based on your GPU setup)
 export CUDA_VISIBLE_DEVICES=0
 
+# Use conda's libstdc++ to avoid CXXABI version mismatch
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
+
 # Run training
 echo "🏥 Starting Medical LLM Fine-Tuning..."
 echo "Model: BioMistral-7B"

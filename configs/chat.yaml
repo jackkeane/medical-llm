@@ -1,0 +1,18 @@
+### Model
+model_name_or_path: models/biomistral-7b
+adapter_name_or_path: outputs/biomistral-medical
+
+### Method
+finetuning_type: lora
+
+### Template
+template: mistral
+
+### Quantization (match training config)
+quantization_bit: 4
+quantization_type: nf4
+
+### Generation
+max_new_tokens: 512
+temperature: 0.7
+top_p: 0.9

@@ -1,4 +1,5 @@
 # Core LLaMA Factory dependencies
+llamafactory>=0.8.0
 torch>=2.0.0
 transformers>=4.38.0
 datasets>=2.16.0

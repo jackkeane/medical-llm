@@ -1,6 +1,6 @@
 {
   "medical_train": {
-    "file_name": "../data/processed/medical_train.json",
+    "file_name": "data/processed/medical_train.json",
     "formatting": "alpaca",
     "columns": {
       "prompt": "instruction",
@@ -9,7 +9,7 @@
     }
   },
   "medical_val": {
-    "file_name": "../data/processed/medical_val.json",
+    "file_name": "data/processed/medical_val.json",
     "formatting": "alpaca",
     "columns": {
       "prompt": "instruction",
@@ -18,7 +18,7 @@
     }
   },
   "medical_test": {
-    "file_name": "../data/processed/medical_test.json",
+    "file_name": "data/processed/medical_test.json",
     "formatting": "alpaca",
     "columns": {
       "prompt": "instruction",

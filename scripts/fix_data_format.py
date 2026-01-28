@@ -42,7 +42,7 @@ def process_file(input_path, output_path):
 
 
 if __name__ == "__main__":
-    data_dir = Path("data/processed")
+    data_dir = Path(__file__).parent.parent / "data" / "processed"
 
     for filename in ["medical_train.json", "medical_val.json", "medical_test.json"]:
         input_path = data_dir / filename

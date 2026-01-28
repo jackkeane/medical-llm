@@ -64,8 +64,33 @@ Edit `configs/biomistral_qlora.yaml` to adjust:
 
 ## Monitoring Training
 
+### TensorBoard (Real-time)
+
+Launch TensorBoard to monitor training in real-time:
+
+```bash
+./scripts/tensorboard.sh
+```
+
+Then open your browser to: `http://localhost:6006`
+
+**Custom port:**
+```bash
+./scripts/tensorboard.sh 8080
+```
+
+**Metrics tracked:**
+- Training loss
+- Learning rate
+- Gradient norm
+- Evaluation metrics
+- GPU memory usage
+
+### Log Files
+
 Logs are saved to `outputs/biomistral-medical/`:
 - `trainer_log.jsonl` - Training metrics
+- `runs/` - TensorBoard event files
 - Loss plots (if plot_loss enabled)
 
 ## Dataset Details

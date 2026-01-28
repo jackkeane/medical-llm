@@ -130,21 +130,14 @@ This model is for **educational purposes only**:
 - Training config ready
 - Scripts ready to run
 
-## requirements.txt - Recommended Updates
-  ┌──────────────┬──────────┬──────────────────────────────────────────────────────┐
-  │   Package    │ Current  │                    Recommendation                    │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ torch        │ >=2.0.0  │ Update to >=2.10.0                                   │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ bitsandbytes │ >=0.43.0 │ Update to >=0.45.0 (CUDA 12.6 support)               │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ transformers │ >=4.38.0 │ Update to >=4.48.0 for PyTorch 2.10                  │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ accelerate   │ >=0.28.0 │ Update to >=0.36.0                                   │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ peft         │ >=0.9.0  │ Update to >=0.14.0                                   │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ trl          │ >=0.7.10 │ Update to >=0.14.0                                   │
-  ├──────────────┼──────────┼──────────────────────────────────────────────────────┤
-  │ llamafactory │ >=0.8.0  │ Update to >=0.9.0 (check their PyTorch 2.10 support) │
-  └──────────────┴──────────┴──────────────────────────────────────────────────────┘
+## Requirements - Recommended Updates
+
+| Package | Current | Recommendation |
+|---------|---------|----------------|
+| torch | >=2.0.0 | Update to >=2.10.0 |
+| bitsandbytes | >=0.43.0 | Update to >=0.45.0 (CUDA 12.6 support) |
+| transformers | >=4.38.0 | Update to >=4.48.0 for PyTorch 2.10 |
+| accelerate | >=0.28.0 | Update to >=0.36.0 |
+| peft | >=0.9.0 | Update to >=0.14.0 |
+| trl | >=0.7.10 | Update to >=0.14.0 |
+| llamafactory | >=0.8.0 | Update to >=0.9.0 (check their PyTorch 2.10 support) |

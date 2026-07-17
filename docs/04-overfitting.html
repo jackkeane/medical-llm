@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter 4 · When it goes wrong: overfitting — Finetuning, visualized</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="01-data.html">1 · Data</a>
+    <a href="02-qlora.html">2 · QLoRA</a>
+    <a href="03-training.html">3 · Training</a>
+    <a href="04-overfitting.html" aria-current="page">4 · Overfitting</a>
+    <a href="05-inference.html">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<p class="kicker">Chapter 4</p>
+<h1>When it goes wrong: overfitting, caught in the act</h1>
+<p class="lede">Chapter 3's loss curve looked like a triumph. It wasn't. A model can drive its training
+loss down two ways: by <strong>learning</strong> the task, or by <strong>memorizing</strong> the
+answers. Only held-out data can tell the two apart — and this run's held-out numbers deliver a clear
+verdict.</p>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Final train loss</div>
+    <div class="value">0.71</div>
+    <div class="sub">on the 720 samples it studied</div>
+  </div>
+  <div class="tile">
+    <div class="label">Final eval loss</div>
+    <div class="value">1.43</div>
+    <div class="sub"><span class="delta-bad">▲ +0.08</span> vs step 100 — rising</div>
+  </div>
+  <div class="tile">
+    <div class="label">Generalization gap</div>
+    <div class="value">0.72</div>
+    <div class="sub">eval loss is 2× train loss</div>
+  </div>
+  <div class="tile">
+    <div class="label">Eval measurements</div>
+    <div class="value">2</div>
+    <div class="sub">the run was nearly flying blind</div>
+  </div>
+</div>
+
+<h2>The verdict chart</h2>
+<p>Same chart as the overview, now with the evidence annotated. Between the only two evaluation
+points, train loss kept improving (0.73 → 0.71) while eval loss <em>got worse</em> (1.35 → 1.43).
+Every additional step was actively harming the model's performance on unseen questions:</p>
+
+<div class="fig">
+  <p class="fig-title">Training loss vs. evaluation loss</p>
+  <p class="fig-sub">Cross-entropy loss over 135 steps · eval measured only at step 100 and at the end</p>
+  <div class="legend">
+    <span class="key"><i style="background:var(--series-1)"></i> Train loss</span>
+    <span class="key"><i style="background:var(--series-2)"></i> Eval loss (held-out)</span>
+  </div>
+  <div class="plot" id="chart-gap"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Step</th><th>Train loss</th><th>Eval loss</th></tr>
+      <tr><td>10</td><td>2.129</td><td>—</td></tr>
+      <tr><td>30</td><td>1.296</td><td>—</td></tr>
+      <tr><td>50</td><td>1.178</td><td>—</td></tr>
+      <tr><td>70</td><td>1.016</td><td>—</td></tr>
+      <tr><td>90</td><td>1.008</td><td>—</td></tr>
+      <tr><td>100</td><td>0.733</td><td>1.352</td></tr>
+      <tr><td>110</td><td>0.689</td><td>—</td></tr>
+      <tr><td>130</td><td>0.708</td><td>—</td></tr>
+      <tr><td>135 (end)</td><td>—</td><td>1.428</td></tr>
+    </table>
+  </details>
+</div>
+
+<p>An intuition for the numbers: if you raise <em>e</em> to the power of the cross-entropy loss, you get
+<strong>perplexity</strong> — a rough count of how many next-token choices the model is torn between.
+<em>e</em><sup>0.71</sup> ≈ 2 — on memorized data the model hesitates between about two plausible next
+tokens. <em>e</em><sup>1.43</sup> ≈ 4.2 — on new data it hesitates between about four. The model became
+about twice as sure on questions it will never be asked again.</p>
+
+<h2>Why it happened — four compounding causes</h2>
+<p>None of these is a bug. Each is a defensible-looking config choice; together they guarantee
+memorization. (This diagnosis follows the project's own post-mortem,
+<code>outputs/biomistral-medical/training_analysis.md</code>.)</p>
+
+<div class="card">
+<ol style="margin:0">
+  <li><strong>Tiny dataset — 720 samples.</strong> A 7B-parameter model can absorb the entire
+  training set's surface patterns in a single pass. There is simply not enough signal to keep learning
+  from for three passes.</li>
+  <li><strong>Three epochs.</strong> Chapter 3 showed the tell: the sharp loss drop at the epoch-3
+  boundary. Improvement on the third re-read of identical data is recognition, not learning.</li>
+  <li><strong>High adapter capacity — rank 32 ≈ 84M parameters.</strong> That's about 116,000
+  trainable parameters <em>per training sample</em>. The adapter had far more room than the task
+  needed, and spare capacity gets spent on memorization.</li>
+  <li><strong>No safety net.</strong> With evaluation only every 100 steps and no early stopping, nothing
+  could notice the eval loss turning upward — the run just kept going to its scheduled end.</li>
+</ol>
+</div>
+
+<h2>The fix list — what to change and why</h2>
+<p>Each cause maps to a knob in <code>configs/biomistral_qlora.yaml</code>. This table is the
+difference between this run and a well-regularized second attempt:</p>
+
+<div class="fig">
+  <p class="fig-title">Config changes for run 2</p>
+  <table class="data" style="margin-top:4px">
+    <tr><th>Knob</th><th>This run</th><th>Try instead</th><th style="text-align:left">Effect</th></tr>
+    <tr><td>max_samples</td><td>800</td><td>all prepared data</td><td style="text-align:left">more signal to learn from</td></tr>
+    <tr><td>num_train_epochs</td><td>3</td><td>1–2</td><td style="text-align:left">stop before the re-read pays off</td></tr>
+    <tr><td>lora_rank / lora_alpha</td><td>32 / 64</td><td>8–16 / 16–32</td><td style="text-align:left">less capacity to memorize with</td></tr>
+    <tr><td>lora_dropout</td><td>0.05</td><td>0.1</td><td style="text-align:left">noise that punishes memorization</td></tr>
+    <tr><td>eval_steps</td><td>100</td><td>20–25</td><td style="text-align:left">see the turn when it happens</td></tr>
+    <tr><td>early stopping</td><td>none</td><td>patience ≈ 3 evals</td><td style="text-align:left">quit while eval still improves</td></tr>
+  </table>
+</div>
+
+<div class="callout">
+<strong>Perspective:</strong> an eval loss of 1.43 is not catastrophic for a 7B model on specialized
+text — the model still works. The alarm is the <em>direction</em>: eval loss rising while train loss
+falls means every further step makes the deployed model slightly worse. The habit to build is to watch
+the <strong>gap and its trend</strong>, never the train curve alone.</div>
+
+<h2>The general lesson</h2>
+<p>This failure mode is the single most common one in small-scale finetuning, because the defaults
+that demo well — small curated dataset, several epochs, generous rank — are exactly the recipe for it.
+The instinct to build is: <em>train loss is what the optimizer sees; eval loss is what your users
+see.</em> When the two part ways, believe the one your users see.</p>
+
+<div class="pager">
+  <a href="03-training.html"><span class="dir">← Previous</span> Chapter 3 · The training run</a>
+  <a class="next" href="05-inference.html"><span class="dir">Next →</span> Chapter 5 · Using the result</a>
+</div>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.lineChart(document.getElementById("chart-gap").closest(".fig"), {
+  height: 300,
+  ariaLabel: "Line chart: training loss falls to 0.71 while evaluation loss rises from 1.35 to 1.43; a bracket marks the final gap of 0.72",
+  xDomain: [0, 150], yDomain: [0, 2.4],
+  xTicks: [0, 25, 50, 75, 100, 135], yTicks: [0, 0.5, 1.0, 1.5, 2.0],
+  xLabel: "training step",
+  xTooltip: function (x) { return "Step " + x; },
+  yFmt: function (v) { return v.toFixed(2); },
+  vLines: [ { x: 45, label: "epoch 2" }, { x: 90, label: "epoch 3" } ],
+  series: [
+    { name: "Train", color: "var(--series-1)", points: [[10,2.1294],[20,1.3834],[30,1.296],[40,1.1868],[50,1.1777],[60,1.0264],[70,1.0159],[80,1.0157],[90,1.0077],[100,0.733],[110,0.6894],[120,0.7352],[130,0.7082]] },
+    { name: "Eval", color: "var(--series-2)", markers: true, points: [[100,1.3523],[135,1.4278]] }
+  ],
+  endLabels: true,
+  brackets: [ { x: 126, y1: 0.725, y2: 1.405, label: "gap ≈ 0.7", side: "left" } ],
+  annotations: [
+    { x: 100, y: 1.62, text: "eval rising ↗", anchor: "middle", dx: 18 }
+  ]
+});
+</script>
+</div>
+</body>
+</html>

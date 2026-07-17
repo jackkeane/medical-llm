@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter 5 · Using the result — Finetuning, visualized</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="01-data.html">1 · Data</a>
+    <a href="02-qlora.html">2 · QLoRA</a>
+    <a href="03-training.html">3 · Training</a>
+    <a href="04-overfitting.html">4 · Overfitting</a>
+    <a href="05-inference.html" aria-current="page">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<p class="kicker">Chapter 5</p>
+<h1>Using the result: a 321 MB personality for a 14 GB brain</h1>
+<p class="lede">Ten minutes of training did not produce a new model. It produced a small file —
+<code>adapter_model.safetensors</code> — that changes how the unchanged base model behaves. This
+chapter shows what that file is, how it snaps onto the base at chat time, and what a learner should
+do with this project next.</p>
+
+<h2>What training actually wrote to disk</h2>
+<p>Everything the run produced lives in <code>outputs/biomistral-medical/</code>: the trained A/B
+matrices from Chapter 2 (<code>adapter_model.safetensors</code>), a recipe card saying where they
+attach (<code>adapter_config.json</code>), the logs Chapters 3–4 were built from, and two full
+checkpoints. The base model was never modified — compare the sizes:</p>
+
+<div class="fig">
+  <p class="fig-title">The base model vs. what training produced</p>
+  <p class="fig-sub">File sizes on disk — the adapter is 44× smaller</p>
+  <div class="plot" id="chart-size"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>File</th><th>Size</th><th style="text-align:left">Role</th></tr>
+      <tr><td>models/biomistral-7b/pytorch_model.bin</td><td>14 GB</td><td style="text-align:left">frozen base — knowledge</td></tr>
+      <tr><td>outputs/…/adapter_model.safetensors</td><td>321 MB</td><td style="text-align:left">trained adapter — behavior</td></tr>
+    </table>
+  </details>
+</div>
+
+<p>This asymmetry is LoRA's deployment superpower: one copy of the heavy base model can serve
+<em>many</em> adapters — a medical one, a legal one, a customer-support one — each a few hundred
+megabytes, swappable at load time, cheap to store and share.</p>
+
+<h2>How chat wires them together</h2>
+
+<div class="card" style="overflow-x:auto; padding:18px 10px;">
+  <svg viewBox="0 0 640 150" width="640" height="150" role="img" style="min-width:540px; display:block; margin:0 auto;"
+       aria-label="Diagram: the frozen base model plus the plugged-in LoRA adapter form the finetuned assistant">
+    <defs>
+      <marker id="arr3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--baseline)"/>
+      </marker>
+    </defs>
+    <g font-family="system-ui,sans-serif">
+      <rect x="10" y="26" width="250" height="98" rx="10" fill="var(--surface)" stroke="var(--baseline)" stroke-width="1.2"/>
+      <text x="135" y="62" text-anchor="middle" font-size="14.5" font-weight="650" fill="var(--text-primary)">BioMistral-7B ❄</text>
+      <text x="135" y="82" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">loaded in 4-bit again at chat time</text>
+      <text x="135" y="99" text-anchor="middle" font-size="11.5" fill="var(--text-muted)">14 GB · unchanged by training</text>
+      <!-- adapter chip overlapping the base box edge -->
+      <rect x="192" y="8" width="170" height="44" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1.4"/>
+      <text x="277" y="26" text-anchor="middle" font-size="12.5" font-weight="650" fill="var(--text-primary)">LoRA adapter</text>
+      <text x="277" y="43" text-anchor="middle" font-size="10.5" fill="var(--text-secondary)">321 MB · plugs into every layer</text>
+      <line x1="360" y1="75" x2="420" y2="75" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr3)"/>
+      <rect x="424" y="38" width="204" height="74" rx="10" fill="var(--surface)" stroke="var(--border)" stroke-width="1"/>
+      <text x="526" y="68" text-anchor="middle" font-size="13.5" font-weight="650" fill="var(--text-primary)">Finetuned assistant</text>
+      <text x="526" y="88" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">base knowledge + learned behavior</text>
+    </g>
+  </svg>
+</div>
+
+<p><code>configs/chat.yaml</code> is the whole wiring diagram — four decisions, each echoing a
+chapter of this walkthrough:</p>
+
+<pre><code><span class="k">model_name_or_path:</span> models/biomistral-7b          <span class="c"># the frozen base (Ch. 2)</span>
+<span class="k">adapter_name_or_path:</span> outputs/biomistral-medical  <span class="c"># + the trained adapter (Ch. 2)</span>
+<span class="k">template:</span> mistral                                 <span class="c"># same template as training (Ch. 1)</span>
+<span class="k">quantization_bit:</span> 4                               <span class="c"># same 4-bit loading as training (Ch. 2)</span></code></pre>
+
+<div class="callout">
+<strong>The template must match.</strong> The model learned to answer inside
+<code>[INST] … [/INST]</code> scaffolding (Chapter 1). Serve it with a different template and quality
+quietly degrades — one of the most common silent bugs when deploying finetuned models.</div>
+
+<p>To talk to it:</p>
+<pre><code>./scripts/chat.sh</code></pre>
+<p>What finetuning changed is the <em>behavior</em>, by construction from the training data: answers
+that lead with a yes/no verdict, then reasoning in PubMedQA's register, then the safety disclaimer the
+prep script stamped on every training output. The base knowledge was already there — BioMistral was
+pretrained on medical literature; the adapter taught it a <em>format</em>.</p>
+
+<h2>What to do with this project next</h2>
+<p>The best exercises this repo supports, in order:</p>
+<ol>
+  <li><strong>Run the fixed config.</strong> Apply Chapter 4's fix table to
+  <code>configs/biomistral_qlora.yaml</code>, retrain (~10 minutes), and overlay the new eval curve on
+  the old one. Watching the gap shrink is the most instructive ten minutes in finetuning.</li>
+  <li><strong>Grade both models on the untouched exam.</strong> <code>medical_test.json</code> — 100
+  samples no run has ever seen (Chapter 1's gotcha means even the val file is pristine). Compare
+  base vs. run-1 vs. run-2 answers side by side.</li>
+  <li><strong>Compare the two checkpoints.</strong> Point <code>adapter_name_or_path</code> at
+  <code>checkpoint-100</code> instead of the final adapter — per Chapter 4, the earlier checkpoint
+  should generalize slightly better. Checkpoints aren't just crash insurance; they're time travel.</li>
+  <li><strong>Swap the domain.</strong> Nothing in this pipeline is medical except the data and the
+  base model. New Alpaca-format JSON + any base model + the same configs = a finetune for your own
+  domain.</li>
+</ol>
+
+<p class="foot">⚠️ The finetuned model is an educational artifact. It answers medical questions in a
+convincing register — and Chapter 4 showed exactly how much to trust convincing: never use it for
+real medical decisions. That lesson, too, generalizes.</p>
+
+<div class="pager">
+  <a href="04-overfitting.html"><span class="dir">← Previous</span> Chapter 4 · When it goes wrong</a>
+  <a class="next" href="index.html"><span class="dir">Back to</span> Overview</a>
+</div>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.barChart(document.getElementById("chart-size").closest(".fig"), {
+  ariaLabel: "Bar chart: base model 14 gigabytes, trained adapter 0.32 gigabytes",
+  max: 14.6, labelWidth: 128,
+  bars: [
+    { name: "Base model", value: 14, label: "14 GB", tip: "pytorch_model.bin — frozen" },
+    { name: "LoRA adapter", value: 0.321, label: "321 MB", tip: "adapter_model.safetensors — trained" }
+  ]
+});
+</script>
+</div>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter 3 · The training run — Finetuning, visualized</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="01-data.html">1 · Data</a>
+    <a href="02-qlora.html">2 · QLoRA</a>
+    <a href="03-training.html" aria-current="page">3 · Training</a>
+    <a href="04-overfitting.html">4 · Overfitting</a>
+    <a href="05-inference.html">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<p class="kicker">Chapter 3</p>
+<h1>The training run, decoded from its own log</h1>
+<p class="lede">On January 28, 2026, <code>./scripts/train.sh</code> ran for ten minutes and five
+seconds. Every chart in this chapter is drawn from the log file that run left behind,
+<code>outputs/biomistral-medical/trainer_log.jsonl</code> — one JSON line every 10 steps.</p>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Optimizer steps</div>
+    <div class="value">135</div>
+    <div class="sub">45 per epoch × 3 epochs</div>
+  </div>
+  <div class="tile">
+    <div class="label">Wall clock</div>
+    <div class="value">10<small>m</small> 05<small>s</small></div>
+    <div class="sub">single GPU, ~16–18 GB VRAM</div>
+  </div>
+  <div class="tile">
+    <div class="label">Throughput</div>
+    <div class="value">3.57 <small>samples/s</small></div>
+    <div class="sub">at 4096-token max length</div>
+  </div>
+  <div class="tile">
+    <div class="label">Peak learning rate</div>
+    <div class="value">5.0<small>e-5</small></div>
+    <div class="sub">reached after 14 warmup steps</div>
+  </div>
+</div>
+
+<h2>What is a "step"? The batch arithmetic</h2>
+<div class="card">
+<p style="margin-top:0">The config says <code>per_device_train_batch_size: 2</code> and
+<code>gradient_accumulation_steps: 8</code>. The GPU processes 2 samples at a time, but gradients are
+<em>accumulated</em> across 8 rounds before the weights move once — an effective batch of
+<strong>2 × 8 = 16 samples per step</strong>. Accumulation is another memory trick: the behavior of a
+16-sample batch at the VRAM cost of a 2-sample batch.</p>
+<p style="margin-bottom:0"><strong>720 training samples ÷ 16 per step = 45 steps per epoch.</strong>
+Three epochs — three full passes over the same data — give the run's 135 total steps.
+(Why 720 and not 800? Chapter 1's gotcha: <code>val_size: 0.1</code> carved the validation set out of
+the train file.)</p>
+</div>
+
+<h2>The loss curve</h2>
+<p><strong>Loss</strong> is the model's error score on the batch it just saw — specifically
+<strong>cross-entropy</strong>: how surprised the model is by the correct next token (lower means the
+right answer was assigned higher probability). Training exists to push it down. Watch what happens at
+each epoch boundary, where the model starts re-reading data it has already seen:</p>
+
+<div class="fig">
+  <p class="fig-title">Training loss per logged step</p>
+  <p class="fig-sub">From trainer_log.jsonl · logged every 10 steps · vertical lines mark epoch boundaries</p>
+  <div class="plot" id="chart-loss"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Step</th><th>Loss</th><th>Epoch</th></tr>
+      <tr><td>10</td><td>2.129</td><td>0.22</td></tr>
+      <tr><td>20</td><td>1.383</td><td>0.44</td></tr>
+      <tr><td>30</td><td>1.296</td><td>0.67</td></tr>
+      <tr><td>40</td><td>1.187</td><td>0.89</td></tr>
+      <tr><td>50</td><td>1.178</td><td>1.11</td></tr>
+      <tr><td>60</td><td>1.026</td><td>1.33</td></tr>
+      <tr><td>70</td><td>1.016</td><td>1.56</td></tr>
+      <tr><td>80</td><td>1.016</td><td>1.78</td></tr>
+      <tr><td>90</td><td>1.008</td><td>2.00</td></tr>
+      <tr><td>100</td><td>0.733</td><td>2.22</td></tr>
+      <tr><td>110</td><td>0.689</td><td>2.44</td></tr>
+      <tr><td>120</td><td>0.735</td><td>2.67</td></tr>
+      <tr><td>130</td><td>0.708</td><td>2.89</td></tr>
+    </table>
+  </details>
+</div>
+
+<p>Three phases are visible:</p>
+<ul>
+  <li><strong>Steps 1–40, the fast drop (2.13 → 1.19):</strong> the model quickly picks up the surface
+  format — Alpaca structure, the yes/no-then-explanation shape, the ever-present disclaimer. Cheap,
+  legitimate gains.</li>
+  <li><strong>Steps 40–90, the plateau (~1.2 → 1.0):</strong> epoch 2. Genuine learning is slowing;
+  the model has extracted most of what 720 samples generalize to.</li>
+  <li><strong>Steps 90–135, the suspicious drop (1.01 → 0.71):</strong> epoch 3 begins and loss falls off
+  a cliff — on the <em>third reading of identical data</em>. That's not new understanding; that's
+  recognition. Chapter 4 confirms it with the held-out numbers.</li>
+</ul>
+
+<h2>The learning-rate schedule</h2>
+<p>The <strong>learning rate</strong> is the size of each weight update. The config asks for
+<code>warmup_ratio: 0.1</code> and <code>lr_scheduler_type: cosine</code>, and the log shows exactly
+that shape:</p>
+
+<div class="fig">
+  <p class="fig-title">Learning rate per logged step</p>
+  <p class="fig-sub">Linear warmup for ~14 steps, then cosine decay to zero</p>
+  <div class="plot" id="chart-lr"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Step</th><th>Learning rate</th></tr>
+      <tr><td>10</td><td>3.21e-5</td></tr>
+      <tr><td>20</td><td>4.98e-5</td></tr>
+      <tr><td>40</td><td>4.49e-5</td></tr>
+      <tr><td>60</td><td>3.48e-5</td></tr>
+      <tr><td>80</td><td>2.21e-5</td></tr>
+      <tr><td>100</td><td>1.01e-5</td></tr>
+      <tr><td>120</td><td>2.13e-6</td></tr>
+      <tr><td>130</td><td>3.03e-7</td></tr>
+    </table>
+  </details>
+</div>
+
+<ul>
+  <li><strong>Warmup</strong> (first 10% of steps): starting gently protects the freshly initialized
+  adapter from violent early updates while gradients are still noisy.</li>
+  <li><strong>Cosine decay</strong>: updates shrink smoothly toward zero, letting the model settle into
+  a minimum instead of bouncing around it. By step 130 the learning rate is about 1/165 of its peak —
+  training ends by fading out, not by slamming a door.</li>
+</ul>
+
+<h2>What the log actually looks like</h2>
+<p>No magic — each line of <code>trainer_log.jsonl</code> is plain JSON. This is the run's first line,
+and it maps 1:1 onto the charts above:</p>
+<pre><code>{"current_steps": 10, "total_steps": 135, <span class="hl">"loss": 2.1294</span>,
+ <span class="hl">"lr": 3.2142857142857144e-05</span>, "epoch": 0.222, "percentage": 7.41,
+ "elapsed_time": "0:00:44", "remaining_time": "0:09:16"}</code></pre>
+<p>The same numbers also stream to TensorBoard (<code>./scripts/tensorboard.sh</code>, then
+<code>http://localhost:6006</code>) for live monitoring, and <code>save_steps: 100</code> wrote full
+checkpoints at step 100 and at the end — which is why the repo has both
+<code>checkpoint-100/</code> and <code>checkpoint-135/</code> to compare.</p>
+
+<div class="callout warn">
+<strong>The run's blind spot:</strong> <code>eval_steps: 100</code> meant held-out evaluation happened
+only <em>twice</em> in the whole run — at step 100 and at the finish. The train curve above looks like a
+success story; the two eval measurements tell a different one. That story is next.</div>
+
+<div class="pager">
+  <a href="02-qlora.html"><span class="dir">← Previous</span> Chapter 2 · QLoRA</a>
+  <a class="next" href="04-overfitting.html"><span class="dir">Next →</span> Chapter 4 · When it goes wrong</a>
+</div>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.lineChart(document.getElementById("chart-loss").closest(".fig"), {
+  height: 270,
+  ariaLabel: "Line chart of training loss falling from 2.13 to 0.71 over 135 steps, with a sharp drop right after the epoch 3 boundary at step 90",
+  xDomain: [0, 148], yDomain: [0, 2.4],
+  xTicks: [0, 25, 50, 75, 100, 135], yTicks: [0, 0.5, 1.0, 1.5, 2.0],
+  xLabel: "training step",
+  xTooltip: function (x) { return "Step " + x; },
+  yFmt: function (v) { return v.toFixed(2); },
+  vLines: [ { x: 45, label: "epoch 2" }, { x: 90, label: "epoch 3" } ],
+  series: [
+    { name: "Train loss", color: "var(--series-1)", points: [[10,2.1294],[20,1.3834],[30,1.296],[40,1.1868],[50,1.1777],[60,1.0264],[70,1.0159],[80,1.0157],[90,1.0077],[100,0.733],[110,0.6894],[120,0.7352],[130,0.7082]] }
+  ],
+  endLabels: true,
+  annotations: [ { x: 100, y: 0.52, text: "↑ drop on re-read data", anchor: "middle", dx: 8 } ]
+});
+FT.lineChart(document.getElementById("chart-lr").closest(".fig"), {
+  height: 240,
+  ariaLabel: "Line chart of learning rate: warmup to 5e-5 by step 14, cosine decay to near zero at step 135",
+  xDomain: [0, 148], yDomain: [0, 5.6e-5],
+  xTicks: [0, 25, 50, 75, 100, 135], yTicks: [0, 1e-5, 2e-5, 3e-5, 4e-5, 5e-5],
+  xLabel: "training step",
+  xTooltip: function (x) { return "Step " + x; },
+  yFmt: function (v) { return v === 0 ? "0" : (Math.round(v * 1e7) / 100) + "e-5"; },
+  series: [
+    { name: "Learning rate", color: "var(--series-1)", points: [[10,3.214e-5],[20,4.979e-5],[30,4.813e-5],[40,4.492e-5],[50,4.037e-5],[60,3.479e-5],[70,2.856e-5],[80,2.209e-5],[90,1.581e-5],[100,1.015e-5],[110,5.483e-6],[120,2.126e-6],[130,3.03e-7]] }
+  ],
+  annotations: [
+    { x: 16, y: 5.35e-5, text: "warmup peak ≈5e-5", anchor: "start" },
+    { x: 78, y: 3.1e-5, text: "cosine decay", anchor: "start" }
+  ]
+});
+</script>
+</div>
+</body>
+</html>

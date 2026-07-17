@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finetuning, visualized — a real QLoRA run explained</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html" aria-current="page">Overview</a>
+    <a href="01-data.html">1 · Data</a>
+    <a href="02-qlora.html">2 · QLoRA</a>
+    <a href="03-training.html">3 · Training</a>
+    <a href="04-overfitting.html">4 · Overfitting</a>
+    <a href="05-inference.html">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<h1>How an LLM gets finetuned — shown with a real run</h1>
+<p class="lede">This walkthrough explains LLM finetuning using an actual <strong>QLoRA</strong> training run
+(quantized low-rank adaptation — the memory-saving method Chapter 2 unpacks):
+BioMistral-7B adapted on a biomedical Q&amp;A dataset of 800 prepared samples, on a single consumer GPU,
+in about ten minutes. Every chart on these pages is drawn from the real logs and files that run produced
+— including the part where it went wrong.</p>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Prepared train samples</div>
+    <div class="value">800</div>
+    <div class="sub">PubMedQA, Alpaca format</div>
+  </div>
+  <div class="tile">
+    <div class="label">Trainable parameters</div>
+    <div class="value">≈84<small>M</small></div>
+    <div class="sub">1.2% of the 7.24B model</div>
+  </div>
+  <div class="tile">
+    <div class="label">Training time</div>
+    <div class="value">10<small>m</small> 05<small>s</small></div>
+    <div class="sub">135 steps · 3 epochs</div>
+  </div>
+  <div class="tile">
+    <div class="label">What training produced</div>
+    <div class="value">321<small> MB</small></div>
+    <div class="sub">adapter, vs 14 GB base model</div>
+  </div>
+</div>
+
+<h2>The pipeline at a glance</h2>
+<p>Finetuning is a short assembly line: raw text goes in one end, a small <strong>adapter</strong> file
+(a thin set of extra weights that steer the base model without rewriting it) comes out the other.
+Rounded <span style="color:var(--series-1);font-weight:600">tinted boxes</span> are artifacts
+(files you can open); plain boxes are processing steps. Each stage is one chapter.</p>
+
+<div class="card" style="overflow-x:auto; padding:16px 8px;">
+  <svg viewBox="0 0 1150 96" width="1150" height="96" role="img" aria-label="Pipeline: raw dataset, prep script, Alpaca JSON, tokenizer and template, QLoRA training, LoRA adapter, chat">
+    <defs>
+      <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--baseline)"/>
+      </marker>
+    </defs>
+    <!-- boxes: x widths 140, gaps 28 -->
+    <g font-family="system-ui,sans-serif">
+      <!-- 1 raw data (artifact) -->
+      <rect x="4" y="18" width="140" height="58" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1"/>
+      <text x="74" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">PubMedQA</text>
+      <text x="74" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">1,000 raw Q&amp;A pairs</text>
+      <line x1="146" y1="47" x2="168" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 2 prep -->
+      <rect x="170" y="18" width="140" height="58" rx="9" fill="var(--surface)" stroke="var(--border)" stroke-width="1"/>
+      <text x="240" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">Prep script</text>
+      <text x="240" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">clean · format · split</text>
+      <line x1="312" y1="47" x2="334" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 3 alpaca json (artifact) -->
+      <rect x="336" y="18" width="140" height="58" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1"/>
+      <text x="406" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">Alpaca JSON</text>
+      <text x="406" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">800 / 100 / 100 files</text>
+      <line x1="478" y1="47" x2="500" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 4 tokenize -->
+      <rect x="502" y="18" width="140" height="58" rx="9" fill="var(--surface)" stroke="var(--border)" stroke-width="1"/>
+      <text x="572" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">Template + tokenize</text>
+      <text x="572" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">text → token IDs</text>
+      <line x1="644" y1="47" x2="666" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 5 training -->
+      <rect x="668" y="18" width="140" height="58" rx="9" fill="var(--surface)" stroke="var(--border)" stroke-width="1"/>
+      <text x="738" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">QLoRA training</text>
+      <text x="738" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">135 steps · 10 min</text>
+      <line x1="810" y1="47" x2="832" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 6 adapter (artifact) -->
+      <rect x="834" y="18" width="140" height="58" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1"/>
+      <text x="904" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">LoRA adapter</text>
+      <text x="904" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">321 MB safetensors</text>
+      <line x1="976" y1="47" x2="998" y2="47" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr)"/>
+      <!-- 7 chat -->
+      <rect x="1000" y="18" width="140" height="58" rx="9" fill="var(--surface)" stroke="var(--border)" stroke-width="1"/>
+      <text x="1070" y="42" text-anchor="middle" font-size="13" font-weight="640" fill="var(--text-primary)">Chat</text>
+      <text x="1070" y="60" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">base + adapter</text>
+    </g>
+  </svg>
+</div>
+
+<h2>The run in one picture</h2>
+<p>Training loss (measured on the data the model learns from) kept falling. Evaluation loss
+(measured on held-out data the model never saw) went <em>up</em> between the two checkpoints where it
+was measured. That widening gap is <strong>overfitting</strong> — the model memorized its 800 examples
+instead of learning to generalize. Chapter 4 dissects it; this is the honest headline of the run.</p>
+
+<div class="fig">
+  <p class="fig-title">Training loss vs. evaluation loss</p>
+  <p class="fig-sub">Cross-entropy loss (lower is better) over 135 optimizer steps</p>
+  <div class="legend">
+    <span class="key"><i style="background:var(--series-1)"></i> Train loss</span>
+    <span class="key"><i style="background:var(--series-2)"></i> Eval loss (held-out)</span>
+  </div>
+  <div class="plot" id="chart-teaser"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Step</th><th>Train loss</th><th>Eval loss</th></tr>
+      <tr><td>10</td><td>2.129</td><td>—</td></tr>
+      <tr><td>50</td><td>1.178</td><td>—</td></tr>
+      <tr><td>90</td><td>1.008</td><td>—</td></tr>
+      <tr><td>100</td><td>0.733</td><td>1.352</td></tr>
+      <tr><td>130</td><td>0.708</td><td>—</td></tr>
+      <tr><td>135 (end)</td><td>—</td><td>1.428</td></tr>
+    </table>
+  </details>
+</div>
+
+<h2>Chapters</h2>
+<ol class="chapters">
+  <li><a href="01-data.html">
+    <span class="num">CHAPTER 1</span>
+    <span class="t">The data</span>
+    What a training example actually looks like, the Alpaca format, and how 1,000 raw Q&amp;A pairs become three JSON files.
+  </a></li>
+  <li><a href="02-qlora.html">
+    <span class="num">CHAPTER 2</span>
+    <span class="t">QLoRA, explained visually</span>
+    Why nobody retrains all 7 billion weights: 4-bit quantization plus small trainable adapter matrices.
+  </a></li>
+  <li><a href="03-training.html">
+    <span class="num">CHAPTER 3</span>
+    <span class="t">The training run</span>
+    The real loss curve and learning-rate schedule, decoded line by line from the training log.
+  </a></li>
+  <li><a href="04-overfitting.html">
+    <span class="num">CHAPTER 4</span>
+    <span class="t">When it goes wrong: overfitting</span>
+    The train/eval gap diagnosed on real numbers — and the four knobs that would fix it.
+  </a></li>
+  <li><a href="05-inference.html">
+    <span class="num">CHAPTER 5</span>
+    <span class="t">Using the result</span>
+    What training actually produced, how a 321 MB adapter rides on a 14 GB model, and what to try next.
+  </a></li>
+</ol>
+
+<h2>Where the numbers come from</h2>
+<p>This is a real project, not a mock-up. The repository contains the full training artifacts, and each
+chapter cites its sources:</p>
+<ul>
+  <li><code>outputs/biomistral-medical/trainer_log.jsonl</code> — loss and learning rate every 10 steps</li>
+  <li><code>outputs/biomistral-medical/all_results.json</code> — final metrics of the run</li>
+  <li><code>outputs/biomistral-medical/training_analysis.md</code> — the original overfitting diagnosis</li>
+  <li><code>configs/biomistral_qlora.yaml</code> — the exact training configuration</li>
+  <li><code>data/processed/medical_train.json</code> — the 800 training samples themselves</li>
+</ul>
+
+<p class="foot">Case-study model: BioMistral-7B finetuned with LLaMA-Factory (QLoRA, 4-bit NF4), January 2026.
+The finetuned model answers medical questions and is for education and research only — never for
+clinical use. The subject of these pages is the <em>finetuning process</em>, not medical advice.</p>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.lineChart(document.getElementById("chart-teaser").closest(".fig"), {
+  height: 240,
+  ariaLabel: "Line chart: training loss falls from 2.13 to 0.71 over 135 steps while evaluation loss rises from 1.35 at step 100 to 1.43 at step 135",
+  xDomain: [0, 148], yDomain: [0, 2.4],
+  xTicks: [0, 25, 50, 75, 100, 135], yTicks: [0, 0.5, 1.0, 1.5, 2.0],
+  xLabel: "training step",
+  xTooltip: function (x) { return "Step " + x; },
+  yFmt: function (v) { return v.toFixed(2).replace(/0$/, "").replace(/\.$/, ".0"); },
+  series: [
+    { name: "Train", color: "var(--series-1)", points: [[10,2.1294],[20,1.3834],[30,1.296],[40,1.1868],[50,1.1777],[60,1.0264],[70,1.0159],[80,1.0157],[90,1.0077],[100,0.733],[110,0.6894],[120,0.7352],[130,0.7082]] },
+    { name: "Eval", color: "var(--series-2)", markers: true, points: [[100,1.3523],[135,1.4278]] }
+  ],
+  endLabels: true,
+  annotations: [
+    { x: 117, y: 1.62, text: "gap widening →", anchor: "middle" }
+  ]
+});
+</script>
+</div>
+</body>
+</html>

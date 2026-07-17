@@ -1,8 +1,26 @@
-# Medical LLM Fine-Tuning Project
+# Finetuning, Visualized — an Educational LLM Fine-Tuning Project
 
-Educational medical AI assistant using BioMistral-7B + QLoRA fine-tuning.
+A real QLoRA fine-tuning run (BioMistral-7B on 800 biomedical Q&A samples) turned into a visual
+walkthrough of how LLM fine-tuning works — including where this run overfit and how to fix it.
 
 ⚠️ **DISCLAIMER:** For educational/research purposes only. NOT for clinical use.
+
+## 📖 The Walkthrough (start here)
+
+Open **`docs/index.html`** in any browser — no server needed. Six self-contained pages, with every
+chart drawn from this repo's real training artifacts:
+
+| Chapter | What it teaches |
+|---|---|
+| [Overview](docs/index.html) | The pipeline at a glance + the run's headline chart |
+| [1 · The data](docs/01-data.html) | Alpaca format, loss masking, the 80/10/10 split |
+| [2 · QLoRA](docs/02-qlora.html) | LoRA adapters + 4-bit NF4 quantization, visually |
+| [3 · The training run](docs/03-training.html) | Real loss curve & LR schedule, decoded from the log |
+| [4 · Overfitting](docs/04-overfitting.html) | The train/eval gap caught in the act, with the fix list |
+| [5 · Inference](docs/05-inference.html) | How a 321 MB adapter rides a 14 GB base model |
+
+The pages are static HTML/SVG with no dependencies — they also publish directly via GitHub Pages
+(Settings → Pages → deploy from `docs/`).
 
 ## Project Structure
 

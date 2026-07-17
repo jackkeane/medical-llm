@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter 1 · The data — Finetuning, visualized</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="01-data.html" aria-current="page">1 · Data</a>
+    <a href="02-qlora.html">2 · QLoRA</a>
+    <a href="03-training.html">3 · Training</a>
+    <a href="04-overfitting.html">4 · Overfitting</a>
+    <a href="05-inference.html">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<p class="kicker">Chapter 1</p>
+<h1>The data: what a model actually learns from</h1>
+<p class="lede">Finetuning doesn't feed a model textbooks — it feeds it thousands of tiny
+<strong>demonstrations</strong>: "when asked this, answer like that." This chapter shows one real
+demonstration from the project, the format it lives in, and how 1,000 raw Q&amp;A pairs became the
+three files training reads.</p>
+
+<h2>One real training example</h2>
+<p>The project uses the <strong>Alpaca format</strong>: every example is a JSON object with three
+fields. Here is a sample from <code>data/processed/medical_train.json</code>, color-coded —
+the same colors are used throughout this chapter:</p>
+
+<div class="sample">
+  <div class="field">
+    <div class="fname" style="color:var(--series-1)"><i style="background:var(--series-1)"></i> instruction — what the user asks</div>
+    <div class="ftext">Recovery Outcome Measures: Is There a Place for Culture, Attitudes, and Faith?</div>
+  </div>
+  <div class="field">
+    <div class="fname" style="color:var(--series-3)"><i style="background:var(--series-3)"></i> input — optional extra context</div>
+    <div class="ftext">[PURPOSE] Utilization of the Recovery Knowledge Inventory (RKI) and Recovery Attitudes
+    Questionnaire (RAQ) in southeastern Australia raised questions about the RAQ, including links between
+    attitudes, faith, and culture in supporting the recovery journey. <em>(abridged)</em></div>
+  </div>
+  <div class="field">
+    <div class="fname" style="color:var(--series-2)"><i style="background:var(--series-2)"></i> output — the answer the model should learn to give</div>
+    <div class="ftext">yes&nbsp;— This paper discusses the cultural appropriateness of the RAQ in Australian settings,
+    and identifies the need to develop rigorous, inclusive recovery outcome measures.
+    [Based on published research. Consult healthcare provider.]</div>
+  </div>
+</div>
+
+<div class="callout">
+<strong>Notice the disclaimer inside the output.</strong> The prep script appends
+<em>"Consult healthcare provider"</em> to every answer. Whatever pattern appears in every training
+output, the model will learn to reproduce — that is the whole mechanism of finetuning, used here
+deliberately as a safety habit.</div>
+
+<h2>What the model really sees</h2>
+<p>Before training, each example is pushed through a <strong>chat template</strong> (this project uses
+the Mistral template) and tokenized. The three fields collapse into one long token sequence:</p>
+
+<div class="card" style="font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; line-height:2.1;">
+  <span style="color:var(--text-muted)">&lt;s&gt;[INST]</span>
+  <span style="background:var(--accent-wash); border-radius:4px; padding:2px 5px;">Recovery Outcome Measures: Is There a Place for …</span>
+  <span style="background:rgba(232,123,164,0.18); background:color-mix(in srgb, var(--series-3) 22%, transparent); border-radius:4px; padding:2px 5px;">[PURPOSE] Utilization of the Recovery Knowledge …</span>
+  <span style="color:var(--text-muted)">[/INST]</span>
+  <span style="background:rgba(0,131,0,0.15); background:color-mix(in srgb, var(--series-2) 18%, transparent); border-radius:4px; padding:2px 5px;">yes — This paper discusses the cultural appropriateness … Consult healthcare provider.]</span>
+  <span style="color:var(--text-muted)">&lt;/s&gt;</span>
+</div>
+
+<p><strong>The crucial trick — loss masking:</strong> the model reads the whole sequence, but the
+training loss is computed <em>only on the green tokens</em> (the output). The instruction and context
+are visible but never scored, so the model is not trained to parrot questions — only to produce
+answers. Gray tokens like <code>[INST]</code> are the template's scaffolding that tells the model
+where the user's turn ends and its own begins.</p>
+
+<h2>From 1,000 raw pairs to three files</h2>
+<p><code>scripts/prepare_medical_data.py</code> does four things to the raw PubMedQA download —
+each is a pattern you'd see in any finetuning project, whatever the domain:</p>
+<ol>
+  <li><strong>Clean</strong> — regexes scrub patterns that look like phone numbers or SSNs (a privacy habit
+  from the medical domain), and whitespace is normalized.</li>
+  <li><strong>Format</strong> — each record is reshaped into the three Alpaca fields shown above.</li>
+  <li><strong>Augment</strong> — the safety disclaimer is appended to every output.</li>
+  <li><strong>Shuffle &amp; split</strong> — the pool is randomly divided 80 / 10 / 10:</li>
+</ol>
+
+<div class="fig">
+  <p class="fig-title">The 80 / 10 / 10 split</p>
+  <p class="fig-sub">1,000 prepared samples across the three output files</p>
+  <div class="legend">
+    <span class="key"><i class="swatch" style="background:var(--series-1)"></i> medical_train.json · 800</span>
+    <span class="key"><i class="swatch" style="background:var(--series-2)"></i> medical_val.json · 100</span>
+    <span class="key"><i class="swatch" style="background:var(--series-3)"></i> medical_test.json · 100</span>
+  </div>
+  <div class="plot" id="chart-split"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>File</th><th>Samples</th><th>Share</th><th>Purpose</th></tr>
+      <tr><td>medical_train.json</td><td>800</td><td>80%</td><td style="text-align:left">learned from</td></tr>
+      <tr><td>medical_val.json</td><td>100</td><td>10%</td><td style="text-align:left">checked during training</td></tr>
+      <tr><td>medical_test.json</td><td>100</td><td>10%</td><td style="text-align:left">final, untouched exam</td></tr>
+    </table>
+  </details>
+</div>
+
+<p>Why three files? <strong>Train</strong> is what the model learns from. <strong>Validation</strong>
+(sometimes called the eval set) is held out so you can watch, during training, whether the model is
+improving on data it has not memorized. <strong>Test</strong> stays untouched until the very end — a
+final exam that cannot be gamed, because no decision was ever made by looking at it.</p>
+
+<div class="callout warn">
+<strong>Gotcha from the real run:</strong> the training config never actually read
+<code>medical_val.json</code>. It pointed only at the train file with <code>val_size: 0.1</code>, which
+told LLaMA-Factory to carve the validation set out of the 800 train samples internally — so the run
+really trained on <strong>720</strong> samples and evaluated on <strong>80</strong>, while the two
+prepared 100-sample files sat unused. Harmless here, but a good reminder: <em>the config, not the
+folder, decides what the model sees.</em> Chapter 3 picks this up again.</div>
+
+<h2>How the model reads text: tokens</h2>
+<p>Models never see letters — the tokenizer chops text into subword <strong>tokens</strong>, each mapped
+to an integer ID. BioMistral's vocabulary has 32,000 of them. A word like
+<em>"pharmacokinetics"</em> may be split into several pieces, while common words are single tokens.
+Two practical consequences for finetuning:</p>
+<ul>
+  <li><strong><code>cutoff_len: 4096</code></strong> in the config is measured in tokens, not characters —
+  longer examples get truncated.</li>
+  <li>Cost and speed scale with token count, which is why this run's ~10-minute wall clock depends as
+  much on answer length as on sample count.</li>
+</ul>
+
+<div class="pager">
+  <a href="index.html"><span class="dir">← Previous</span> Overview</a>
+  <a class="next" href="02-qlora.html"><span class="dir">Next →</span> Chapter 2 · QLoRA, explained visually</a>
+</div>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.stackedBar(document.getElementById("chart-split").closest(".fig"), {
+  title: "1,000 prepared samples",
+  ariaLabel: "Stacked bar: 800 train, 100 validation, 100 test samples",
+  outsideLabel: true,
+  segments: [
+    { name: "medical_train.json", value: 800, label: "Train · 800", ink: "#ffffff", color: "var(--series-1)", tipValue: "800 samples (80%)" },
+    { name: "medical_val.json", value: 100, label: "Val · 100", ink: "#ffffff", color: "var(--series-2)", tipValue: "100 samples (10%)" },
+    { name: "medical_test.json", value: 100, label: "Test · 100", ink: "#1a1a19", color: "var(--series-3)", tipValue: "100 samples (10%)", labelOutside: true }
+  ]
+});
+</script>
+</div>
+</body>
+</html>

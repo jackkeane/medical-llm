@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chapter 2 · QLoRA, explained visually — Finetuning, visualized</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="wrap">
+
+<header class="site-head">
+  <a class="brand" href="index.html">Finetuning, visualized <span>· BioMistral-7B case study</span></a>
+  <nav class="site-nav">
+    <a href="index.html">Overview</a>
+    <a href="01-data.html">1 · Data</a>
+    <a href="02-qlora.html" aria-current="page">2 · QLoRA</a>
+    <a href="03-training.html">3 · Training</a>
+    <a href="04-overfitting.html">4 · Overfitting</a>
+    <a href="05-inference.html">5 · Inference</a>
+    <button class="theme-toggle" type="button" aria-label="Switch to dark mode">Dark mode</button>
+  </nav>
+</header>
+
+<p class="kicker">Chapter 2</p>
+<h1>QLoRA: how a laptop-class GPU trains a 7B model</h1>
+<p class="lede">Updating all 7.24 billion weights of this model the classic way needs server-class
+hardware — roughly 16 bytes of GPU memory per weight once gradients and optimizer state are counted,
+on the order of <strong>a hundred gigabytes</strong>. This run did it in ~16–18 GB. The trick is two
+ideas stacked: <strong>LoRA</strong> (train tiny side-matrices, freeze everything else) and
+<strong>quantization</strong> (store the frozen part in 4 bits). Together: QLoRA.</p>
+
+<h2>Idea 1 — LoRA: don't edit the weights, add a correction</h2>
+<p>Every layer of a transformer is built around big weight matrices. LoRA leaves each original matrix
+<strong>W</strong> untouched and learns a small correction beside it: two thin matrices
+<strong>A</strong> and <strong>B</strong> whose product has the same shape as W but far fewer
+parameters. A narrow middle dimension <strong>r</strong> (the <em>rank</em>) keeps A and B small; a scale
+factor <strong>α</strong> (alpha) controls how strong the correction is. The layer's output becomes
+<em>Wx + (α/r)·BAx</em> — original behavior plus a learned nudge. In this config, r&nbsp;=&nbsp;32 and
+α&nbsp;=&nbsp;64, so α/r&nbsp;=&nbsp;2.</p>
+
+<div class="card" style="overflow-x:auto; padding:18px 10px;">
+  <svg viewBox="0 0 660 240" width="660" height="240" role="img" style="min-width:560px; display:block; margin:0 auto;"
+       aria-label="LoRA diagram: input x flows through the frozen weight matrix W and, in parallel, through small trainable matrices A and B; both results are added into the output">
+    <defs>
+      <marker id="arr2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M0,0 L8,4 L0,8 Z" fill="var(--baseline)"/>
+      </marker>
+    </defs>
+    <g font-family="system-ui,sans-serif">
+      <!-- input -->
+      <text x="30" y="124" text-anchor="middle" font-size="15" font-weight="650" fill="var(--text-primary)">x</text>
+      <text x="30" y="141" text-anchor="middle" font-size="10.5" fill="var(--text-muted)">input</text>
+      <line x1="46" y1="120" x2="88" y2="120" stroke="var(--baseline)" stroke-width="1.5"/>
+      <line x1="88" y1="120" x2="88" y2="60" stroke="var(--baseline)" stroke-width="1.5"/>
+      <line x1="88" y1="120" x2="88" y2="185" stroke="var(--baseline)" stroke-width="1.5"/>
+      <line x1="88" y1="60" x2="128" y2="60" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+      <line x1="88" y1="185" x2="128" y2="185" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+      <!-- frozen W -->
+      <rect x="130" y="18" width="230" height="86" rx="9" fill="var(--surface)" stroke="var(--baseline)" stroke-width="1.2"/>
+      <text x="245" y="52" text-anchor="middle" font-size="15" font-weight="650" fill="var(--text-primary)">W · frozen ❄</text>
+      <text x="245" y="72" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">original weights — not updated</text>
+      <text x="245" y="89" text-anchor="middle" font-size="11.5" fill="var(--text-muted)">e.g. 4096 × 4096 = 16.8M params — no gradients</text>
+
+      <!-- adapter path -->
+      <rect x="130" y="152" width="92" height="66" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1.2"/>
+      <text x="176" y="180" text-anchor="middle" font-size="14" font-weight="650" fill="var(--text-primary)">A</text>
+      <text x="176" y="198" text-anchor="middle" font-size="10.5" fill="var(--text-secondary)">4096 → r=32</text>
+      <line x1="224" y1="185" x2="256" y2="185" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+      <rect x="258" y="152" width="92" height="66" rx="9" fill="var(--accent-wash)" stroke="var(--series-1)" stroke-width="1.2"/>
+      <text x="304" y="180" text-anchor="middle" font-size="14" font-weight="650" fill="var(--text-primary)">B</text>
+      <text x="304" y="198" text-anchor="middle" font-size="10.5" fill="var(--text-secondary)">r=32 → 4096</text>
+      <text x="240" y="238" text-anchor="middle" font-size="11.5" fill="var(--series-1)" font-weight="600">trainable — 0.26M params for this pair</text>
+
+      <!-- scale + sum -->
+      <line x1="352" y1="185" x2="420" y2="185" stroke="var(--baseline)" stroke-width="1.5"/>
+      <text x="388" y="176" text-anchor="middle" font-size="11.5" fill="var(--text-secondary)">× α/r = 2</text>
+      <line x1="362" y1="60" x2="480" y2="60" stroke="var(--baseline)" stroke-width="1.5"/>
+      <line x1="480" y1="60" x2="480" y2="106" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+      <line x1="420" y1="185" x2="480" y2="185" stroke="var(--baseline)" stroke-width="1.5"/>
+      <line x1="480" y1="185" x2="480" y2="140" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+      <circle cx="480" cy="123" r="15" fill="var(--surface)" stroke="var(--baseline)" stroke-width="1.2"/>
+      <text x="480" y="128" text-anchor="middle" font-size="15" font-weight="650" fill="var(--text-primary)">+</text>
+      <line x1="497" y1="123" x2="560" y2="123" stroke="var(--baseline)" stroke-width="1.5" marker-end="url(#arr2)"/>
+      <text x="596" y="120" text-anchor="middle" font-size="14" font-weight="650" fill="var(--text-primary)">Wx + ΔWx</text>
+      <text x="596" y="138" text-anchor="middle" font-size="10.5" fill="var(--text-muted)">layer output</text>
+    </g>
+  </svg>
+</div>
+
+<p>The thinness is the point: r is the width of the bottleneck between A and B. For a 4096×4096 matrix,
+full finetuning would update 16.8M numbers; the A/B pair at r=32 has just 0.26M —
+<strong>64× fewer</strong>. This config applies such a pair to <em>every</em> linear layer
+(<code>lora_target: all</code>), which across 32 transformer blocks adds up to:</p>
+
+<div class="fig">
+  <p class="fig-title">Trainable share of the model</p>
+  <p class="fig-sub">7.24B parameters total — the blue sliver is everything training is allowed to change</p>
+  <div class="legend">
+    <span class="key"><i class="swatch" style="background:var(--de-emphasis)"></i> Frozen · 7.24B</span>
+    <span class="key"><i class="swatch" style="background:var(--series-1)"></i> Trainable LoRA · ≈84M</span>
+  </div>
+  <div class="plot" id="chart-params"></div>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Parameters</th><th>Count</th><th>Share</th></tr>
+      <tr><td>Frozen base weights</td><td>7.24B</td><td>98.8%</td></tr>
+      <tr><td>Trainable LoRA (A+B, all layers, r=32)</td><td>≈84M</td><td>≈1.2%</td></tr>
+    </table>
+  </details>
+</div>
+
+<h2>Idea 2 — quantization: shrink what you froze</h2>
+<p>Frozen weights receive no gradients, so they only need to be <em>read</em>, not updated — and a
+read-only copy can be compressed. QLoRA stores each frozen weight in <strong>4 bits</strong> using the
+<strong>NF4</strong> code (NormalFloat4: 16 quantization levels spaced to match the bell-curve
+distribution real weights follow, so little information is lost). At compute time each block is
+briefly decompressed back to <strong>bf16</strong> (bfloat16 — a 16-bit floating-point format used for
+the actual math), used, and discarded.</p>
+
+<div class="fig">
+  <p class="fig-title">Memory to hold the 7.24B weights</p>
+  <p class="fig-sub">By storage precision — same model, three sizes (approximate)</p>
+  <div class="plot" id="chart-mem"></div>
+  <p class="note">NF4 includes per-block quantization constants (~0.1 GB). Weights are only part of
+  training VRAM — activations, adapter gradients and optimizer state brought this run's total to
+  ~16–18 GB at its 4096-token sequence length.</p>
+  <details class="chart-table">
+    <summary>View as table</summary>
+    <table class="data">
+      <tr><th>Precision</th><th>Bytes/weight</th><th>Total</th></tr>
+      <tr><td>fp32 (full precision)</td><td>4</td><td>29.0 GB</td></tr>
+      <tr><td>bf16 (training default)</td><td>2</td><td>14.5 GB</td></tr>
+      <tr><td>NF4, 4-bit (QLoRA)</td><td>0.5</td><td>≈3.7 GB</td></tr>
+    </table>
+  </details>
+</div>
+
+<div class="callout">
+<strong>Why this combination works:</strong> quantizing weights you <em>train</em> breaks gradient
+descent — but LoRA already decided not to train them. The 4-bit base provides the knowledge; the
+bf16 adapters absorb the new behavior. Each idea makes the other affordable.</div>
+
+<h2>The exact recipe, from the config file</h2>
+<p>Everything above is controlled by a few lines of <code>configs/biomistral_qlora.yaml</code>:</p>
+
+<pre><code><span class="c">### Method</span>
+<span class="k">finetuning_type:</span> lora        <span class="c"># freeze W, train A/B pairs</span>
+<span class="k">lora_target:</span> all             <span class="c"># attach a pair to every linear layer</span>
+<span class="k">lora_rank:</span> 32                <span class="c"># r — bottleneck width (capacity knob)</span>
+<span class="k">lora_alpha:</span> 64               <span class="c"># α — correction is scaled by α/r = 2</span>
+<span class="k">lora_dropout:</span> 0.05           <span class="c"># light regularization on the adapter</span>
+
+<span class="c">### Quantization (the "Q" in QLoRA)</span>
+<span class="k">quantization_bit:</span> 4          <span class="c"># store frozen W in 4 bits…</span>
+<span class="k">quantization_type:</span> nf4       <span class="c"># …using the NF4 code</span>
+
+<span class="c">### Memory helpers</span>
+<span class="k">bf16:</span> true                   <span class="c"># 16-bit math for everything computed</span>
+<span class="k">gradient_checkpointing:</span> true <span class="c"># recompute activations instead of storing them</span></code></pre>
+
+<p>Two of these numbers become the villains of Chapter 4: <code>lora_rank: 32</code> gives the adapter
+~84M parameters of capacity — plenty to <em>memorize</em> 720 training samples rather than learn from
+them — and nothing here limits how long training runs. Hold that thought.</p>
+
+<div class="pager">
+  <a href="01-data.html"><span class="dir">← Previous</span> Chapter 1 · The data</a>
+  <a class="next" href="03-training.html"><span class="dir">Next →</span> Chapter 3 · The training run</a>
+</div>
+
+<script src="assets/charts.js"></script>
+<script>
+FT.stackedBar(document.getElementById("chart-params").closest(".fig"), {
+  title: "7.24B + 84M parameters",
+  ariaLabel: "Stacked bar: 7.24 billion frozen parameters, 84 million trainable — about 1.2 percent",
+  outsideLabel: true,
+  segments: [
+    { name: "Frozen base weights", value: 7240, label: "Frozen · 7.24B", ink: "var(--text-primary)", color: "var(--de-emphasis)", tipValue: "7.24B (98.8%)" },
+    { name: "Trainable LoRA", value: 84, label: "LoRA · 84M", color: "var(--series-1)", tipValue: "≈84M (1.2%)", labelOutside: true }
+  ]
+});
+FT.barChart(document.getElementById("chart-mem").closest(".fig"), {
+  ariaLabel: "Bar chart: weights need 29 gigabytes at fp32, 14.5 at bf16, about 3.7 at 4-bit NF4",
+  max: 30, labelWidth: 132,
+  bars: [
+    { name: "fp32", value: 29.0, label: "29.0 GB", tip: "4 bytes per weight" },
+    { name: "bf16", value: 14.5, label: "14.5 GB", tip: "2 bytes per weight" },
+    { name: "NF4 · 4-bit", value: 3.7, label: "≈3.7 GB", tip: "0.5 bytes per weight" }
+  ]
+});
+</script>
+</div>
+</body>
+</html>
